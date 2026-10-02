@@ -1,6 +1,6 @@
 ---
 name: sumgate-workflow-reader
-description: Reads and analyzes SumGate (app.sumgate.io) workflow-automation schemas by calling SumGate's internal API directly — listing a workflow's nodes (triggers, conditions, delays, HTTP requests, SQL requests, emails, etc.), how they connect, and each node's actual internal configuration (the literal SQL a sql_request runs, the URL/method/body a http_request sends, the rules a condition checks). Make sure to use this skill whenever the user shares an app.sumgate.io URL, asks to "read", "open", "analyze", or "look at" a SumGate workflow/schema/automation/process, mentions a SumGate workflow or step by its numeric id, or pastes a captured SumGate network request (a URL, cURL command, or raw HTTP request/headers) — even if they don't use the word "API".
+description: Reads and analyzes SumGate (app.sumgate.io) workflow-automation schemas by calling SumGate's internal API directly — listing a workflow's nodes (triggers, conditions, delays, HTTP requests, SQL requests, emails, etc.), how they connect, each node's actual internal configuration (the literal SQL a sql_request runs, the URL/method/body a http_request sends, the rules a condition checks), and its run history (past executions, per-run status/duration, and the literal input/output data each node produced on a given run — for debugging why a workflow failed or behaved unexpectedly). Make sure to use this skill whenever the user shares an app.sumgate.io URL, asks to "read", "open", "analyze", "debug", or "look at" a SumGate workflow/schema/automation/process, asks why a SumGate workflow/run failed or what happened on a specific run, mentions a SumGate workflow or step by its numeric id, or pastes a captured SumGate network request (a URL, cURL command, or raw HTTP request/headers) — even if they don't use the word "API".
 ---
 
 # SumGate workflow reader
@@ -18,6 +18,12 @@ A SumGate workflow URL looks like:
 https://app.sumgate.io/p/<workspace>/workflows/view/?id=<workflow_id>
 ```
 The `id` query parameter is all that's needed to look up the workflow via the API — the workspace slug (`p/<workspace>/`) isn't used by the endpoints below.
+
+**If the user doesn't have an id** — they only know a workflow by name/topic, or want to search/browse across several — list every workflow in the workspace instead of asking them to go find the id themselves:
+```bash
+scripts/list_workflows.sh
+```
+Returns every workflow's `id`, `title`, `description`, `date_created`/`date_modified`, `created_by`/`modified_by`, and `disabled` (`"Y"`/`"N"`). There's no pagination to worry about — it's the full list in one call. Needs `SUMGATE_SCOPE` (see Step 2) like the Step 6 run-history scripts do. Match against `title` (workflow names here tend to look like `[Team][Topic]`, e.g. `[Sales][Onboarding]`) to find candidates, then proceed with Steps 3+ using the `id` you find.
 
 ## Step 2: Set up (or reuse) a named environment
 
@@ -43,6 +49,12 @@ This lists environment names + base URLs only (never cookies) — safe to run an
    scripts/save_config.sh "<env_name>" "<base_url>" "<full cookie header value>"
    ```
    Pass through whatever the user pasted rather than trying to guess or trim it — extra cookies in the string (e.g. `wooTracker`, `amplitude_id_...`, `_dd_s`) are harmless to include. Re-running with the same `<env_name>` overwrites it, which is exactly how to refresh an expired cookie.
+
+   If the task also needs run history / debugging (Step 6), add a 4th argument with the `scope=` value from any `app.sumgate.io/api/workflows/histories` or `step_histories` request in DevTools:
+   ```bash
+   scripts/save_config.sh "<env_name>" "<base_url>" "<full cookie header value>" "<scope value>"
+   ```
+   This is session-scoped like the cookie (one captured value covers every workflow), not needed for structure/config reading (Steps 3–5).
 
 **Every time after that**, the environment(s) already exist — just use them (Step 3) without re-asking, unless a call starts failing auth (expired session), in which case walk through saving that one environment again with a fresh cookie.
 
@@ -131,7 +143,40 @@ A recurring, cross-type pattern worth calling out on its own: look for `{{$.step
 
 **If either endpoint ever stops working** (e.g. SumGate changes its API), don't guess at a replacement — ask the user to capture the real request from DevTools (open the node on the canvas, check the Network tab, paste what fires) the same way these endpoints themselves were found, and update this file once confirmed.
 
+## Step 6: Debugging — run history and logs
+
+For "why did this fail" / "what happened on the last run" style questions, Steps 3–5 aren't enough — they show the workflow's *design*, not what actually happened when it ran. Four more scripts cover that, all keyed by **workflow id** plus a **history id** (one specific execution/run):
+
+**6a. List recent runs** — status, duration, what triggered it, which step it last reached:
+```bash
+scripts/list_runs.sh <workflow_id>                  # most recent runs
+scripts/list_runs.sh <workflow_id> <history_id>      # older runs, paginating backwards from this history_id (exclusive)
+```
+Each run in the result has its own `history_id` — note the one the user cares about (e.g. the first with `"status"` not `"Success"`, or the one matching a timestamp they mentioned) for the next steps.
+
+**6b. See every node a specific run touched:**
+```bash
+scripts/fetch_run_steps.sh <workflow_id> <history_id>
+```
+Returns each executed node's `status`, `duration`, and — notably — `title` often embeds the *actual outcome*, not just the node's name: a `condition` node's title here looks like `"[false] Condition"` or `"[true] Condition"`, telling you exactly which branch it took on **that run**, without needing to re-derive the logic from its config. Each entry also carries a `token` — an opaque, signed string (don't try to construct or decode-and-modify one yourself, just pass it through as given) needed for 6c.
+
+**6c. Read what a node actually received/produced on a specific run:**
+```bash
+scripts/fetch_node_body.sh <workflow_id> <history_id> <token>
+```
+`<token>` is the `token` field for that node from 6b's output. Returns the real `input`/`output` payload — this is usually the actual answer to "why did it fail": a bad input value, an unexpected API response, a null where a field was expected, etc.
+
+**6d. Shortcut for the latest run only** — skips needing a history_id/token lookup, just needs the step id (same ids `fetch_steps.sh`/`fetch_step_config.sh` use):
+```bash
+scripts/fetch_last_node_body.sh <workflow_id> <node_id>
+```
+Use this when the user just means "the last time it ran" rather than a specific historical run.
+
+**Typical debugging flow:** `list_runs.sh` to find the problem run → `fetch_run_steps.sh` on its `history_id` to see which node failed (or which branch a condition took) and grab that node's `token` → `fetch_node_body.sh` with that token to see the actual data that caused it. Summarize findings in plain language (what the node received, what it produced, where it diverges from what the user expected) rather than dumping the raw JSON, same as Steps 3–5.
+
+**If `list_runs.sh`/etc. error about a missing `SUMGATE_SCOPE`:** that environment was set up before this feature existed, or without the optional 4th argument — re-run `save_config.sh` with the scope value (Step 2) rather than guessing or omitting it; these endpoints reject requests without a valid one.
+
 ## Security notes
 
-- **Never write actual cookie/token values into this skill file, into any committed doc, or into any script inside this folder.** They belong only under `~/.config/sumgate/environments/`, which lives outside the skill and is per-user, mode `600` per file. If this skill folder is ever committed to a repo, that config path must stay out of it (it already lives outside the folder by design — don't add code that writes secrets anywhere under the skill's own directory).
+- **Never write actual cookie/token/scope values into this skill file, into any committed doc, or into any script inside this folder.** They belong only under `~/.config/sumgate/environments/`, which lives outside the skill and is per-user, mode `600` per file. If this skill folder is ever committed to a repo, that config path must stay out of it (it already lives outside the folder by design — don't add code that writes secrets anywhere under the skill's own directory). `SUMGATE_SCOPE` (Step 6) is session-scoped the same way the cookie is — treat it with the same care, never as a throwaway value worth hardcoding "just this once".
 - Everything here is **read-only** (`GET` requests). If a task calls for changing a live workflow (a `POST`/`PUT`/`PATCH`/`DELETE` against SumGate), that's a higher-risk action on a shared company system — confirm explicitly with the user before making that kind of call, the same way you would for any other action that mutates shared state.

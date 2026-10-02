@@ -44,3 +44,13 @@ resolve_env() {
     return 1
   fi
 }
+
+# Call after resolve_env for scripts that need SUMGATE_SCOPE (the run-history
+# / debugging endpoints). Separate from resolve_env's own check since most
+# scripts (structure/config reading) don't need it at all.
+require_scope() {
+  if [ -z "${SUMGATE_SCOPE:-}" ]; then
+    echo "This environment has no SUMGATE_SCOPE saved. Re-run save_config.sh with a 4th argument — capture the 'scope=' value from any app.sumgate.io/api/workflows/histories or step_histories request in DevTools." >&2
+    return 1
+  fi
+}
