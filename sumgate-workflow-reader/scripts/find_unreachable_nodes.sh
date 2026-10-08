@@ -28,6 +28,11 @@ RESPONSE=$(curl -s "${SUMGATE_BASE_URL}/api/workflows/steps/list?id=${WORKFLOW_I
   -H 'Accept: */*' \
   -H "Cookie: ${SUMGATE_COOKIE}")
 
+if ! check_response "$RESPONSE"; then
+  echo "$RESPONSE"
+  exit 1
+fi
+
 echo "$RESPONSE" | jq '
   .response as $r
   | ($r.steps | map(.id)) as $all_ids

@@ -54,3 +54,33 @@ require_scope() {
     return 1
   fi
 }
+
+# Call on every raw API response before using/printing it. SumGate's generic
+# auth-failure shape is a bare {"error": "..."} with no "response" key (the
+# normal shape is always {"response": {...}, "server_time": ...}) — this
+# happens whenever the saved cookie has expired, which is routine (sessions
+# seem to die within hours). Without this check, that error would just get
+# pretty-printed as if it were ordinary data and easily missed.
+#
+# Usage: call right after curl, before echoing the response:
+#   check_response "$RESPONSE" || exit 1
+#   echo "$RESPONSE" | jq .   # (still print it either way — see callers)
+check_response() {
+  local response="$1"
+  if command -v jq >/dev/null 2>&1 \
+      && echo "$response" | jq -e 'has("error") and (has("response") | not)' >/dev/null 2>&1; then
+    local err_msg
+    err_msg=$(echo "$response" | jq -r '.error')
+    {
+      echo ""
+      echo "SumGate API error: ${err_msg}"
+      echo "This almost always means the saved session cookie has expired — ask the user for a fresh one:"
+      echo "  1. Open DevTools (F12, or right-click -> Inspect) on app.sumgate.io, go to the Network tab."
+      echo "  2. Find any GET request to the API, e.g. /api/workflows/steps/list?id=..., /api/workflows/get?id=..., or /api/workflows/steps/types."
+      echo "  3. Copy that request's Cookie header value."
+      echo "  4. Re-run: scripts/save_config.sh <env_name> <base_url> \"<cookie>\" [\"<scope>\"]"
+    } >&2
+    return 1
+  fi
+  return 0
+}

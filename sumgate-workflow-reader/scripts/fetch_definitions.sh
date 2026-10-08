@@ -34,8 +34,12 @@ RESPONSE=$(curl -s "${SUMGATE_BASE_URL}/api/workflows/steps/definitions?${QUERY_
   -H 'Accept: */*' \
   -H "Cookie: ${SUMGATE_COOKIE}")
 
+if check_response "$RESPONSE"; then HAD_ERROR=0; else HAD_ERROR=1; fi
+
 if command -v jq >/dev/null 2>&1; then
   echo "$RESPONSE" | jq .
 else
   echo "$RESPONSE"
 fi
+
+exit $HAD_ERROR

@@ -1,6 +1,6 @@
 ---
 name: sumgate-workflow-reader
-description: Reads, debugs, and reviews SumGate (app.sumgate.io) workflow-automation processes by calling SumGate's internal API directly — listing a workflow's nodes (triggers, conditions, delays, HTTP requests, SQL requests, emails, etc.), how they connect, each node's actual internal configuration (the literal SQL a sql_request runs, the URL/method/body a http_request sends, the rules a condition checks), its run history (past executions, per-run status/duration, and the literal input/output data each node produced — for debugging why a workflow failed or behaved unexpectedly), and a structured review (dead/unreachable nodes, unconfigured nodes, hardcoded constants that should be parameters, loops with no guaranteed exit, missing or misleading node names). Make sure to use this skill whenever the user shares an app.sumgate.io URL, asks to "read", "open", "analyze", "debug", "review", "audit", or "clean up" a SumGate workflow/schema/automation/process, asks why a SumGate workflow/run failed or what happened on a specific run, wants to find a workflow by name/topic across the workspace, mentions a SumGate workflow or step by its numeric id, or pastes a captured SumGate network request (a URL, cURL command, or raw HTTP request/headers) — even if they don't use the word "API".
+description: Reads, debugs, reviews, and documents SumGate (app.sumgate.io) workflow-automation processes by calling SumGate's internal API directly — listing a workflow's nodes (triggers, conditions, delays, HTTP requests, SQL requests, emails, etc.), how they connect, each node's actual internal configuration (the literal SQL a sql_request runs, the URL/method/body a http_request sends, the rules a condition checks), its run history (past executions, per-run status/duration, and the literal input/output data each node produced — for debugging why a workflow failed or behaved unexpectedly), a structured review (dead/unreachable nodes, unconfigured nodes, hardcoded constants that should be parameters, loops with no guaranteed exit, missing or misleading node names), and a shareable Google Doc write-up for other developers (sub-flows, DB tables used, what each SQL script does, flagged items needing a human's judgment). Make sure to use this skill whenever the user shares an app.sumgate.io URL, asks to "read", "open", "analyze", "debug", "review", "audit", "document", or "clean up" a SumGate workflow/schema/automation/process, asks why a SumGate workflow/run failed or what happened on a specific run, wants to find a workflow by name/topic across the workspace, mentions a SumGate workflow or step by its numeric id, or pastes a captured SumGate network request (a URL, cURL command, or raw HTTP request/headers) — even if they don't use the word "API".
 ---
 
 # SumGate workflow reader
@@ -41,8 +41,8 @@ This lists environment names + base URLs only (never cookies) — safe to run an
 1. Ask for a short name for this environment (e.g. `prod`, `client-x`, or just their own name if there's only ever going to be one).
 2. Ask for the SumGate base URL (usually `https://app.sumgate.io`, unless this environment is a different instance).
 3. Ask them to grab their session cookie from their own browser:
-   - Open DevTools (Cmd+Option+I on Mac) → **Network** tab, with that SumGate instance open in a browser tab.
-   - Click any request to that domain (reload the page if the list is empty).
+   - Open DevTools (**F12**, or Cmd+Option+I on Mac, or right-click → Inspect) → **Network** tab, with that SumGate instance open in a browser tab.
+   - Click any GET request to the API — e.g. `/api/workflows/steps/list?id=...`, `/api/workflows/get?id=...`, `/api/workflows/steps/types` — reload the page or click around the UI first if the list is empty.
    - Either copy the request **as cURL** (right-click → Copy → Copy as cURL) and pull out the `Cookie:` value, or open the **Headers** panel and copy the `Cookie:` request header directly.
 4. Save it with the helper script, which also sets safe file permissions:
    ```bash
@@ -56,7 +56,7 @@ This lists environment names + base URLs only (never cookies) — safe to run an
    ```
    This is session-scoped like the cookie (one captured value covers every workflow), not needed for structure/config reading (Steps 3–5).
 
-**Every time after that**, the environment(s) already exist — just use them (Step 3) without re-asking, unless a call starts failing auth (expired session), in which case walk through saving that one environment again with a fresh cookie.
+**Every time after that**, the environment(s) already exist — just use them (Step 3) without re-asking, and don't bother "checking liveness" with a separate call first. Every script in this skill detects an expired/invalid cookie on its own: SumGate's auth failure comes back as a bare `{"error": "..."}` (no `"response"` key), and every script catches that shape and prints a clear message to stderr with the exact DevTools steps above, rather than silently treating the error as normal data. When that happens, just follow what it says — walk the user through grabbing a fresh cookie (same steps as above) and re-running `save_config.sh` with the same `<env_name>` — don't guess at a workaround.
 
 ## Step 3: Fetch the workflow's node graph
 
@@ -105,6 +105,8 @@ This calls `GET <SUMGATE_BASE_URL>/api/workflows/steps/list?id=<workflow_id>` an
 - **Not every step necessarily appears in `edges`.** A node can exist on the canvas with no connection shown in this response — this can mean a disconneted/unused leftover branch, or that this endpoint doesn't return every edge. Flag this to the user rather than assuming the workflow is fully linear just because most steps chain together.
 
 Summarize workflows as a table (step → type → what it connects to) rather than dumping raw JSON, unless the user asks for the raw response.
+
+**Don't jump into a review (Step 7) uninvited.** A plain "read"/"analyze"/"describe" request means Steps 3–6 only — the structure, what's inside nodes, run history if asked. Once that's done, it's fine to *mention* that a structured review is available ("want me to also check it over for dead nodes, hardcoded values, etc.?"), but don't run the Step 7 checklist unless the user actually asks for a review/audit/cleanup, either up front or in response to that offer.
 
 ## Step 5: Look inside a single node
 
@@ -176,9 +178,17 @@ Use this when the user just means "the last time it ran" rather than a specific 
 
 **If `list_runs.sh`/etc. error about a missing `SUMGATE_SCOPE`:** that environment was set up before this feature existed, or without the optional 4th argument — re-run `save_config.sh` with the scope value (Step 2) rather than guessing or omitting it; these endpoints reject requests without a valid one.
 
+Same rule as Step 4: once the debugging question is answered, it's fine to offer a full review (Step 7) — don't run it automatically just because you were already elbow-deep in this workflow.
+
 ## Step 7: Reviewing a workflow
 
-For "review this workflow" / "audit it" / "help clean this up" style requests — distinct from just reading or debugging it — read `references/review-checklist.md` and work through its six checks: graph cleanliness (isolated nodes, unreachable sub-flows via `scripts/find_unreachable_nodes.sh`), incomplete configuration (unconfigured nodes, deprecated types), recent run failures, hardcoded constants that should be parameters, loops with no guaranteed exit, and missing or misleading node names. That file has the full procedure for each; this is just the pointer to it.
+**Only run this when the user explicitly asks for it** — "review this workflow", "audit it", "help clean this up", or they accept an offer made at the end of Step 4/6 (see the note there). A general "read"/"analyze"/"what does this do" request is Steps 3–6 only; don't run the review checklist as part of answering that, even on a workflow that looks messy.
+
+When it is asked for: read `references/review-checklist.md` and work through its six checks: graph cleanliness (isolated nodes, unreachable sub-flows via `scripts/find_unreachable_nodes.sh`), incomplete configuration (unconfigured nodes, deprecated types), recent run failures, hardcoded constants that should be parameters, loops with no guaranteed exit, and missing or misleading node names. That file has the full procedure for each; this is just the pointer to it.
+
+## Step 8: Generating workflow documentation
+
+For "document this workflow" / "write up docs for this" style requests — a standing reference write-up for other developers, not an answer to a specific question. Read `references/documentation-template.md` for the full procedure: what to ask first (which language — default to suggesting English), what data to gather, the document structure (header, sub-flows, flow relationships, elements outside the main flow, DB tables, SQL script purposes, integrations), the rule for filtering out obvious test/scratch elements versus flagging ambiguous ones, the 🔶 review-marker convention, and how to actually create/update the Google Doc via the Drive connector.
 
 ## Security notes
 

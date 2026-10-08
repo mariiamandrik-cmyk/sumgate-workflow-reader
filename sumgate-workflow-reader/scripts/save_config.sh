@@ -37,10 +37,10 @@ mkdir -p "$CONFIG_DIR"
 chmod 700 "$CONFIG_ROOT" "$CONFIG_DIR"
 
 {
-  echo "SUMGATE_BASE_URL=${BASE_URL}"
-  echo "SUMGATE_COOKIE=${COOKIE}"
+  printf 'SUMGATE_BASE_URL=%q\n' "$BASE_URL"
+  printf 'SUMGATE_COOKIE=%q\n' "$COOKIE"
   if [ -n "$SCOPE" ]; then
-    echo "SUMGATE_SCOPE=${SCOPE}"
+    printf 'SUMGATE_SCOPE=%q\n' "$SCOPE"
   fi
 } > "$CONFIG_FILE"
 
