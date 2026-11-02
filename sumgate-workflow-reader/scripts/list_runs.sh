@@ -6,8 +6,9 @@
 #   list_runs.sh <workflow_id> [before] [env_name]
 #
 # <before> paginates backwards by history_id (exclusive) — pass the oldest
-# history_id you've already seen to fetch the next older page. Omit it (or
-# pass "latest") to get the most recent runs.
+# history_id you've already seen to fetch the next older page. Omit it, or
+# pass "latest" (needed as a placeholder when also passing env_name), to get
+# the most recent runs.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -27,16 +28,4 @@ fi
 resolve_env "${3:-}"
 require_scope
 
-RESPONSE=$(curl -s "${SUMGATE_BASE_URL}/api/workflows/histories?scope=${SUMGATE_SCOPE}&id=${WORKFLOW_ID}&before=${BEFORE}" \
-  -H 'Accept: */*' \
-  -H "Cookie: ${SUMGATE_COOKIE}")
-
-if check_response "$RESPONSE"; then HAD_ERROR=0; else HAD_ERROR=1; fi
-
-if command -v jq >/dev/null 2>&1; then
-  echo "$RESPONSE" | jq .
-else
-  echo "$RESPONSE"
-fi
-
-exit $HAD_ERROR
+sumgate_get "/api/workflows/histories?scope=${SUMGATE_SCOPE}&id=${WORKFLOW_ID}&before=${BEFORE}"

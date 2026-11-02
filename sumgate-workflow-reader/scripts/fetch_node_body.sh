@@ -29,21 +29,9 @@ STEP_TOKEN="$3"
 resolve_env "${4:-}"
 require_scope
 
-RESPONSE=$(curl -s -G "${SUMGATE_BASE_URL}/api/workflows/step_histories" \
+sumgate_get "/api/workflows/step_histories" -G \
   --data-urlencode "scope=${SUMGATE_SCOPE}" \
   --data-urlencode "id=${WORKFLOW_ID}" \
   --data-urlencode "mode=get_node_body" \
   --data-urlencode "history_id=${HISTORY_ID}" \
-  --data-urlencode "step_token=${STEP_TOKEN}" \
-  -H 'Accept: */*' \
-  -H "Cookie: ${SUMGATE_COOKIE}")
-
-if check_response "$RESPONSE"; then HAD_ERROR=0; else HAD_ERROR=1; fi
-
-if command -v jq >/dev/null 2>&1; then
-  echo "$RESPONSE" | jq .
-else
-  echo "$RESPONSE"
-fi
-
-exit $HAD_ERROR
+  --data-urlencode "step_token=${STEP_TOKEN}"

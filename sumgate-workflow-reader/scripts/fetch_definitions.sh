@@ -30,16 +30,4 @@ STEP_ID="$1"
 QUERY_STRING="$2"
 resolve_env "${3:-}"
 
-RESPONSE=$(curl -s "${SUMGATE_BASE_URL}/api/workflows/steps/definitions?${QUERY_STRING}&id=${STEP_ID}" \
-  -H 'Accept: */*' \
-  -H "Cookie: ${SUMGATE_COOKIE}")
-
-if check_response "$RESPONSE"; then HAD_ERROR=0; else HAD_ERROR=1; fi
-
-if command -v jq >/dev/null 2>&1; then
-  echo "$RESPONSE" | jq .
-else
-  echo "$RESPONSE"
-fi
-
-exit $HAD_ERROR
+sumgate_get "/api/workflows/steps/definitions?${QUERY_STRING}&id=${STEP_ID}"

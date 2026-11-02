@@ -84,3 +84,20 @@ check_response() {
   fi
   return 0
 }
+
+# Shared request helpers. Both take a path+query relative to SUMGATE_BASE_URL,
+# plus optional extra curl args (e.g. -G --data-urlencode ... for safe encoding).
+#   sumgate_fetch  -> sets RESPONSE, returns 1 on an auth/API error
+#   sumgate_get    -> fetch, then pretty-print (jq if available); exit code = fetch result
+sumgate_fetch() {
+  local path="$1"; shift
+  RESPONSE=$(curl -s "${SUMGATE_BASE_URL}${path}" -H 'Accept: */*' -H "Cookie: ${SUMGATE_COOKIE}" "$@")
+  check_response "$RESPONSE"
+}
+
+sumgate_get() {
+  local rc=0
+  sumgate_fetch "$@" || rc=1
+  if command -v jq >/dev/null 2>&1; then echo "$RESPONSE" | jq .; else echo "$RESPONSE"; fi
+  return $rc
+}

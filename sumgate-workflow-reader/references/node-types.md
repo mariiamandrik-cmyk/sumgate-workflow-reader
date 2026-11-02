@@ -57,7 +57,7 @@ The entry point of a workflow: whatever starts it (a person clicking "Run" in th
 
 ## condition
 
-**Schema title:** "Condition". Branches the flow in two: *"True – flow goes on the right side"*, *"False – flow exits on the left"* — matches the `BottomRight`/`BottomLeft` edge endpoints seen in `steps/list` (see main `SKILL.md`).
+**Schema title:** "Condition". Branches the flow in two: *"True – flow goes on the right side"*, *"False – flow exits on the left"* — and this is a **confirmed rule**: in `steps/list`, an edge from the `BottomRight` endpoint is the **true** branch, from `BottomLeft` the **false** branch. Report it as fact, not as an inference. (Run history agrees: a step's title `"[true] Condition"` / `"[false] Condition"` shows which branch was taken.)
 
 **`data` shape once configured** (inferred from the schema; see `references/schemas.md`-style structure below rather than a confirmed live example):
 ```json
@@ -178,7 +178,7 @@ Shared `configuration`: `end_line` (Windows `\r\n` / Unix `\n` / old MacOS `\r`)
 
 ## webhook_reply
 
-**Schema title:** "SETTINGS". Sends an HTTP response back to whatever externally called this workflow — which implies SumGate workflows can be **triggered by an inbound webhook call**, not only `manual_trigger` (a webhook-trigger node type hasn't been seen on a canvas yet; if one shows up, document it and cross-link it here). Fields: `reply_http_code` (status code, default 200), `reply_body` (either a literal `string_template` with `{{...}}` interpolation, or a `payload_path` pointing at a `$.steps...` value), `reply_headers`.
+**Schema title:** "SETTINGS". Sends an HTTP response back to whatever externally called this workflow — which implies SumGate workflows can be **triggered by an inbound webhook call**, not only `manual_trigger` (the matching trigger is the [`webhook`](#webhook) node, Trigger category). Fields: `reply_http_code` (status code, default 200), `reply_body` (either a literal `string_template` with `{{...}}` interpolation, or a `payload_path` pointing at a `$.steps...` value), `reply_headers`.
 
 ## workflow-response
 
