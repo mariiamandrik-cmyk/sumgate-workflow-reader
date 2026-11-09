@@ -1,6 +1,6 @@
 ---
 name: sumgate-workflow-reader
-description: Reads, debugs, reviews, and documents SumGate (app.sumgate.io) workflow-automation processes by calling SumGate's internal API directly — listing a workflow's nodes (triggers, conditions, delays, HTTP requests, SQL requests, emails, etc.), how they connect, each node's actual internal configuration (the literal SQL a sql_request runs, the URL/method/body a http_request sends, the rules a condition checks), its run history (past executions, per-run status/duration, and the literal input/output data each node produced — for debugging why a workflow failed or behaved unexpectedly), a structured review (dead/unreachable nodes, unconfigured nodes, hardcoded constants that should be parameters, loops with no guaranteed exit, missing or misleading node names), and a shareable Google Doc write-up for other developers (sub-flows, DB tables used, what each SQL script does, flagged items needing a human's judgment). **This skill is read-only — it never modifies workflows.** Make sure to use this skill whenever the user shares an app.sumgate.io URL, asks to "read", "open", "analyze", "debug", "review", "audit", "document", or "clean up" a SumGate workflow/schema/automation/process, asks why a SumGate workflow/run failed or what happened on a specific run, wants to find a workflow by name/topic across the workspace, mentions a SumGate workflow or step by its numeric id, or pastes a captured SumGate network request (a URL, cURL command, or raw HTTP request/headers) — even if they don't use the word "API".
+description: Reads, debugs, reviews, and documents SumGate (app.sumgate.io) workflow-automation processes by calling SumGate's internal API directly — listing a workflow's nodes (triggers, conditions, delays, HTTP requests, SQL requests, emails, etc.), how they connect, each node's actual internal configuration (the literal SQL a sql_request runs, the URL/method/body a http_request sends, the rules a condition checks), its run history (past executions, per-run status/duration, and the literal input/output data each node produced — for debugging why a workflow failed or behaved unexpectedly), a structured review (dead/unreachable nodes, unconfigured nodes, hardcoded constants that should be parameters, loops with no guaranteed exit, missing or misleading node names), and a shareable Google Doc write-up for other developers (sub-flows, DB tables used, what each SQL script does, flagged items needing a human's judgment), read-only access to SumGate project database tables (a table's column structure and its rows, e.g. `$table_name`, for checking what a workflow's SQL actually reads or writes), and read-only ad-hoc SQL queries (SELECT only, never INSERT/UPDATE/DELETE) against project storages and DB tables such as HubSpot raw tables. **This skill is read-only — it never modifies workflows.** Make sure to use this skill whenever the user shares an app.sumgate.io URL, asks to "read", "open", "analyze", "debug", "review", "audit", "document", or "clean up" a SumGate workflow/schema/automation/process, asks why a SumGate workflow/run failed or what happened on a specific run, wants to find a workflow by name/topic across the workspace, mentions a SumGate workflow or step by its numeric id, or pastes a captured SumGate network request (a URL, cURL command, or raw HTTP request/headers) — even if they don't use the word "API".
 ---
 
 # SumGate workflow reader
@@ -15,6 +15,8 @@ All scripts live in `scripts/`; run them via Bash.
 
 **This skill is strictly read-only and will NEVER modify a workflow.** It can only:
 - List workflows and search by name/topic
+- Read a project database table's structure and rows (see "Reading database tables")
+- Run **read-only** SQL (`SELECT`/`SHOW`/`DESCRIBE`/`EXPLAIN`) against project storages and plain DB tables such as `raw_hs_contacts` (see "Running read-only SQL")
 - Read a workflow's structure (nodes, connections, internal configuration)
 - Analyze past run history and debug what went wrong
 - Generate documentation for other developers
@@ -127,6 +129,38 @@ Steps 3–5 show a workflow's *design*, not what happened when it ran. All scrip
 
 As with Step 4, you may offer a review afterwards but don't start one on your own.
 
+## Reading database tables
+
+SQL nodes read/write the project's own database tables ("storages"), referenced in queries as `$table_name` (e.g. `$countries`). To check what a workflow's SQL actually sees — column types, sample/actual rows — read the table directly. Both calls are `GET`s and need `SUMGATE_SCOPE`.
+
+| Goal | Command | Endpoint |
+|---|---|---|
+| Table structure (columns, datatype, nullable, length) | `scripts/fetch_table_schema.sh '$table_name' [env_name]` | `GET /api/project/storages/get?scope=…&name=$table_name&mode=grideditor` |
+| Table contents | `scripts/fetch_table_rows.sh '$table_name' [max_rows] [env_name]` | `GET /api/project/storages/gridlist?scope=…&name=$table_name` |
+| **List all tables + columns** (storages and plain DB tables) | `scripts/fetch_sql_schema.sh [filter] [env_name]` | `GET /api/sql/schema?scope=…` |
+
+- **Quote the name** (`'$art_test'`): in the shell an unquoted `$` is expanded. The leading `$` is part of the name.
+- Structure → `response.schema.fields[]` with `name`, `datatype` (`varchar`, `datetime`, …), `null`, `set` (length). The raw response also has `response.export_link` with a signed download key; `fetch_table_schema.sh` strips it. Never paste or follow it.
+- Rows → `response.storages[]`; each row has an `iterator` (1-based row number) plus the table's columns, all values as strings (empty string for empty/NULL-like cells).
+- **No pagination:** `gridlist` ignores `limit`/`page`/`offset`/`page_size` and always returns every row (1264 on a test table). The `max_rows` argument only trims the printed output; the whole table is still downloaded. Prefer it for big tables and summarize rather than dumping everything.
+- Use it when debugging a run: e.g. a SQL node's `FROM slack_bot_prospecting` returned multiple rows — look at that table's rows for the filter value (`client_msg_id`, …) to see why. Table data can contain personal data (names, emails, phones): show only what the question needs.
+- **Not every table the SQL touches is readable here.** Observed: `$art_test` (a project storage) works with both calls. A plain DB table used in SQL without `$` (`slack_bot_prospecting`) returns its columns from the structure call only when passed **without** `$` (with `$` → empty `fields` + `"oops something went wrong"`; its `title` also comes back with the first letter dropped, treat the field list as the useful part), while `gridlist` returns `"table not found"` with or without `$`. So rows of such tables can't be read this way — use the node's run output (`fetch_node_body.sh` on the SQL node) instead.
+- **Finding table names:** `fetch_sql_schema.sh` with no filter lists every table SQL can see (~280, storages keep their `$`) with column counts; with a filter (`fetch_sql_schema.sh hs_`) it prints the matching tables' columns (name, type, nullable, key). It also covers plain DB tables like `raw_hs_contacts` that the storage structure call can't read. The list is cached server-side, so a brand-new table may be missing. Once you have the name, read rows with `run_sql.sh` (see below).
+- Table names also appear in the SQL (`$countries`) or in a node's `data` too. If the user knows the table only by topic, search with `fetch_sql_schema.sh <keyword>` before asking for the name.
+
+## Running read-only SQL
+
+For data that `gridlist` can't return (plain DB tables like `raw_hs_contacts`, filtered/aggregated results, big tables), run a query through SumGate's SQL endpoint:
+```bash
+scripts/run_sql.sh 'SELECT * FROM `raw_hs_contacts` LIMIT 10;' [max_rows] [env_name]
+```
+Calls `POST /api/sql/execute?scope=…` with body `{"sql": "...", "params": {}}`; the answer is `{"result": [ {row}, ... ]}` (no `response` key, unlike the other endpoints). Needs `SUMGATE_SCOPE`. Project storages are referenced as `$table_name`, plain tables by bare name.
+
+- **Strictly read-only.** This is the one non-GET call in the skill, so `run_sql.sh` validates the query locally before sending anything and refuses it otherwise. Allowed: a single `SELECT`, `WITH … SELECT`, `SHOW`, `DESCRIBE`/`DESC`, `EXPLAIN`. Refused: `INSERT`, `UPDATE`, `DELETE`, `DROP`, `ALTER`, `TRUNCATE`, `CREATE`, `REPLACE INTO`, `MERGE`, `GRANT`, `CALL`, `SET`, `LOCK`, `LOAD`, `SELECT … INTO`, `FOR UPDATE`, and multiple statements. If the user asks for a write query, decline and tell them to run it themselves in SumGate. Never bypass or weaken the guard, and never call the endpoint with curl directly.
+- **Always add a `LIMIT`** (start with 10) — there is no server-side pagination here.
+- Use backticks around column names containing `-` (HubSpot raw tables have `canonical-vid`, `portal-id`, …); some columns hold JSON as strings.
+- Tables contain personal data (emails, phones, names): show only what the question needs and summarize instead of dumping rows.
+
 ## Step 7: Reviewing a workflow
 
 **Only when explicitly asked** ("review", "audit", "clean up", or accepting the offer from Step 4/6). Read `references/review-checklist.md` and work through its six checks: graph cleanliness (`scripts/find_unreachable_nodes.sh`), incomplete configuration, recent run failures, hardcoded constants, loops with no guaranteed exit, and missing/misleading node names.
@@ -138,4 +172,4 @@ For "document this workflow" / "write up docs" requests — a standing write-up 
 ## Security notes
 
 - **Never write real cookie/token/scope values** into this file, any doc, or any script in this folder. They live only under `~/.config/sumgate/environments/` (per-user, mode `600`, outside the skill). Don't add code that writes secrets under the skill's directory. `SUMGATE_SCOPE` is session-scoped like the cookie — same care.
-- **⛔ This skill NEVER modifies workflows.** It is strictly read-only — all operations are `GET` requests only. Changing a workflow (adding nodes, editing configurations, removing steps, reordering connections, or running any `POST`/`PUT`/`PATCH`/`DELETE` operation) is a live change to a shared company automation tool — this is dangerous and must be done by a human developer directly in the SumGate UI, with human judgment and accountability for any side effects. This skill will never suggest, attempt, or facilitate workflow changes. If the user asks to modify a workflow, decline clearly and direct them to make the change in the SumGate UI themselves.
+- **⛔ This skill NEVER modifies workflows.** It is strictly read-only — every operation is a `GET`, except `run_sql.sh`, which `POST`s a query that is first checked locally to be a plain read (SELECT/SHOW/DESCRIBE/EXPLAIN only). Changing a workflow (adding nodes, editing configurations, removing steps, reordering connections, or running any `POST`/`PUT`/`PATCH`/`DELETE` operation) is a live change to a shared company automation tool — this is dangerous and must be done by a human developer directly in the SumGate UI, with human judgment and accountability for any side effects. This skill will never suggest, attempt, or facilitate workflow changes. If the user asks to modify a workflow, decline clearly and direct them to make the change in the SumGate UI themselves.
